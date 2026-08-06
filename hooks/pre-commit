@@ -1,0 +1,35 @@
+#!/bin/sh
+# memo-bank demand-driven coverage loop — non-blocking pre-commit nudge.
+#
+# Surfaces uncovered staged code into the spec-wanted backlog at commit time.
+# Discovers the island root (nearest ancestor holding .island-slices.json) so the
+# same hook works in the umbrella and in every nested sub-repo. NEVER blocks the
+# commit (always exits 0).
+#
+# Install into every island repo with:  make install-hooks
+
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+dir="$top"
+island=""
+while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+  if [ -f "$dir/.island-slices.json" ]; then
+    island="$dir"
+    break
+  fi
+  dir="$(dirname "$dir")"
+done
+[ -z "$island" ] && exit 0   # not inside the island — do nothing
+
+py="$island/tools/memo-bank/.venv/bin/python"
+[ -x "$py" ] || exit 0
+
+"$py" "$island/tools/memo-bank/coverage_loop.py" \
+  --mode staged \
+  --registry "$island/.island-slices.json" \
+  --store "$island/tools/memo-bank/coverage-backlog.json" || true
+
+# stale-spec drift: governed code changed since its governing doc's last_reviewed
+"$py" "$island/tools/memo-bank/drift_check.py" \
+  --registry "$island/.island-slices.json" || true
+
+exit 0

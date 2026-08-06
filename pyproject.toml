@@ -1,0 +1,39 @@
+[project]
+name = "memo-bank"
+version = "0.3.0"
+description = "Read-only MCP server + maintenance loops over a git-native docs corpus: resolve the spec governing a file in ~2 reads, and keep the corpus honest (missing-spec coverage loop, stale-spec drift check)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "kmitin", email = "38323390+kmitin@users.noreply.github.com" }]
+keywords = ["mcp", "documentation", "specs", "context", "agents", "docs-as-code"]
+dependencies = [
+    "mcp>=1.0,<2",   # 2.x changes the Server API (list_tools); untested — see README status
+    "python-frontmatter>=1.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+memobank = "cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Flat modules: keeps direct-script execution working (the git hook runs
+# `python drift_check.py`) while making everything importable once installed.
+py-modules = [
+    "memo_bank",
+    "cli",
+    "doc_validator",
+    "project_config",
+    "coverage_loop",
+    "coverage_backlog",
+    "drift_check",
+    "benchmark_time_to_context",
+    "scaffold",
+]
