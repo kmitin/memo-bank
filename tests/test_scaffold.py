@@ -9,7 +9,7 @@ from pathlib import Path
 
 import scaffold as sc
 
-ENGINE = Path(__file__).resolve().parent
+ENGINE = Path(__file__).resolve().parents[1]   # repo root
 
 
 def test_plan_writes_is_config_and_docs_only():

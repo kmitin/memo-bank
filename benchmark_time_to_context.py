@@ -2,7 +2,7 @@
 """Time-to-context benchmark for the memo-bank federation.
 
 Operationalizes the time-to-context dimension and
-evidence_requirement #4 of dec-20260604-memo-bank-topology-v2-federation-poc-
+evidence_requirement #4 of the project's architecture decision
 claude-code-271d0fd0:
 
   "median <= 2 file reads from project root to applicable rules in hand,
@@ -19,7 +19,7 @@ Method (honest, empirical — no hardcoded expected hits):
   retrieval mechanism, and coverage is a distinct (and currently sparser)
   axis.
 
-Baseline contrast (the "before" state, from the environment-change spec):
+Baseline contrast (the "before" state):
   without the corpus, an agent greps/opens scattered candidate docs with no
   precedence — the documented prior state this effort exists to replace.
 

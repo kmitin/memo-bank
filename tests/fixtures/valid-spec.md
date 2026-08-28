@@ -8,7 +8,7 @@ owner: test
 last_reviewed: 2026-05-18
 valid_until: 2026-08-18
 applies_to:
-  - fixtures/*.md
+  - tests/fixtures/*.md
 tags:
   - fixture
 related: []

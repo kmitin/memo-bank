@@ -20,13 +20,13 @@ indexed: true
 
 # Frontmatter schema v1
 
-The contract every doc under `docs/specs/`, `docs/state/`, `docs/archive/`, and `.haft/specs/` MUST satisfy. The validator (pre-commit hook + CI step) refuses to merge any doc that violates this schema. The validator never warns — it either passes silently or fails the build.
+The contract every doc in the corpus MUST satisfy. The validator (pre-commit hook + CI step) refuses to merge any doc that violates this schema. The validator never warns — it either passes silently or fails the build.
 
 This document validates against itself. If the validator can't accept this file, the validator is wrong.
 
 ## Field families
 
-Four families per the V2 architecture decision (the project's architecture decision record):
+Four field families:
 
 - **Identity**: `id`, `kind`, `subproject`
 - **Governance**: `title`, `owner`, `last_reviewed`, `status`, `valid_until`
@@ -151,4 +151,3 @@ If the validator implementation, when it lands, can parse this file without erro
 ## Pointers
 
 - Term map carrier (optional): `docs/_terms/term-map.md`
-- Probe findings that shaped this schema: `note-20260515-9eb2d566`

@@ -1,29 +1,20 @@
 #!/usr/bin/env python3
-"""Memo-bank MCP server v1 — read-only docs corpus surface (MCP).
+"""Memo-bank — a read-only MCP server over a git-native docs corpus.
 
-The memo-bank wraps the V2-nested docs corpus (per architectural decision
-dec-20260517-the V2-nested docs decision)
-as an MCP tool surface. It is intentionally read-only and stateless:
-authoring stays in editors + git workflow; the memo-bank only serves
-queries.
+Serves the corpus as an MCP tool surface. Read-only and stateless by design:
+authoring stays in your editor and git; this only answers queries.
 
-V1 scope:
-    - Three tools fully implemented: docs.list, docs.get, docs.resolve_path
-    - Five tools stubbed: docs.get_section, docs.search_live,
-      docs.search_archive, docs.resolve_term, docs.compose_context
-    - Multi-corpus support: pass --corpus name=path per subproject.
-    - Corpus loading prefers docs/index.json (validator-generated), falls
-      back to filesystem walk + frontmatter parse.
-    - No reload mechanism. Restart the server to pick up corpus changes.
+Surface (all eight tools live, in both single-corpus and federation mode):
+    docs.list · docs.get · docs.get_section · docs.resolve_path
+    docs.search_live · docs.search_archive · docs.resolve_term
+    docs.compose_context
 
-V1 explicitly does NOT include:
-    - Writes (read-only first, per the V2 mcp_deployment_independence
-      and corpus_subsumption constraints; authoring stays in git).
-    - Webhook or poll-based reload.
-    - Cross-repo cross-reference resolution (each corpus validates
-      independently; cross-corpus `related:` references are a v2
-      concern surfaced via the global index merge).
-    - Health endpoint with staleness detection.
+Corpus loading prefers a validator-generated docs/index.json and falls back to
+a filesystem walk + frontmatter parse. The federation reloads a slice when its
+content changes (mtime-based), so edits are picked up without a restart.
+
+Deliberately out of scope: writes of any kind, and cross-corpus `related:`
+resolution (each corpus validates independently).
 """
 
 from __future__ import annotations
@@ -432,7 +423,7 @@ def tool_resolve_path(corpus: Corpus, path: str) -> list[dict[str, Any]]:
 
 # ---------------------------------------------------------------------------
 # Incremental-load core — the rungs that deliver "load just enough, not at
-# once" (the environment-change spec observables 6, 12, 13):
+# once" — the incremental-load ladder:
 #   get_section   one H2 slice of one doc          (rung 1)
 #   search_live   find by content, hot corpus      (rung 3, archive excluded)
 #   search_archive find by content, cold corpus    (rung 3, archive only)
@@ -702,7 +693,7 @@ def tool_resolve_term(corpus: Corpus, term: str,
 
 
 # ---------------------------------------------------------------------------
-# Federation (umbrella slice only) — per dec-20260604-memo-bank-topology-v2-
+# Federation (umbrella slice only) — fan-out + merge across slices.
 # federation-poc-claude-code-271d0fd0
 #
 # INVARIANT (dumb federation): this layer does fan-out + merge + schema-version
@@ -957,8 +948,6 @@ def stub(name: str, **received_args: Any) -> dict[str, Any]:
         "error": "not implemented in v1",
         "tool": name,
         "args_received": received_args,
-        "tracked_under": "dec-20260517-the V2-nested docs decision"
-                         "nested-docs-auth-98241800",
         "v1_implemented": sorted(TOOL_DISPATCH),
     }
 

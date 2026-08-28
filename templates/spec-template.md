@@ -13,7 +13,7 @@ WHICH KIND AM I WRITING?
   spec     present-tense contract — "what must hold / how it works"   ← this template
   state    current snapshot — "what the situation is right now"
   archive  cold history — "what we used to do and why it changed" (indexed: false)
-  (decision/vision kinds are NOT in the frozen schema — see note-20260604-9c78b4b3)
+  (decision/vision are NOT kinds in this schema)
 
 CONTRACT-FIRST RULE (mandatory — applies to EVERY spec):
   A spec is the gold-ground contract: it defines the functionality / configuration,

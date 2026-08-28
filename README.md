@@ -81,6 +81,21 @@ $ memobank drift --registry .island-slices.json
   - review-ingestion-status (last_reviewed 2026-06-27) — 7 changed: …
 ```
 
+## The agent skill
+
+`skills/memo-bank-query/` is a Claude Code skill that teaches an agent *when and
+how* to query the corpus — resolve-before-edit, expand topic queries with domain
+synonyms, and treat a miss as "undocumented", not "unconstrained". Install it once
+and it applies to every project you work in:
+
+```bash
+cp -r skills/memo-bank-query ~/.claude/skills/     # user-global
+# or, per project:  cp -r skills/memo-bank-query <project>/.claude/skills/
+```
+
+The MCP tools work without it; the skill is what stops an agent from grepping docs
+by hand or inventing a rule when none exists.
+
 ## The corpus model
 
 Each *slice* (a repo, or a subproject within one) owns

@@ -37,3 +37,6 @@ py-modules = [
     "benchmark_time_to_context",
     "scaffold",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
