@@ -132,16 +132,30 @@ engine depends on no other tool.
 
 ## Spec-source adapters
 
-Most projects already keep their vocabulary and governing artifacts in whatever
-methodology they use. The engine does not hardcode a list of known locations —
-each ecosystem is an **adapter** in `spec_sources.py` that detects its own
-artifacts under a project root and parses them into a neutral shape.
+Most projects already keep their vocabulary and decisions in whatever methodology
+they use. The engine hardcodes no list of locations — each ecosystem is an
+**adapter** that declares *where its artifacts live*, and everything downstream
+(terms, and the drift check) works off that.
 
-Built in: `haft` (`.haft/specs/term-map.md`) and `docs-native`
-(`docs/_terms/term-map.md`). Sources are merged; registration order is precedence.
+Built in:
 
-**Adding an ecosystem is a new adapter, never an engine edit.** If it keeps a
-markdown glossary in a fenced ```yaml term-map block, that is four lines:
+| adapter | artifacts it contributes |
+|---|---|
+| `haft` | `.haft/specs/term-map.md` — bounded-context vocabulary |
+| `docs-native` | `docs/_terms/term-map.md` — the memo-bank's own location |
+| [`grill-with-docs`](https://github.com/mattpocock/skills) | `CONTEXT.md` glossary (root or per-context) + `docs/adr/` decisions |
+| [`superpowers`](https://github.com/obra/superpowers) | `docs/superpowers/specs/` designs + `docs/superpowers/plans/` |
+
+**Why this matters beyond terms:** the drift check needs to know which document
+governs which code. memo-bank's own specs declare that in frontmatter
+(`applies_to` + `last_reviewed`). Foreign artifacts — an ADR, a design doc —
+declare neither. So an adapter reports the **file paths the document mentions**
+as its governed set, and the document's own last commit date stands in for the
+review date. The result: `memobank drift` flags a stale ADR or design in any
+registered ecosystem, not just memo-bank specs.
+
+**Adding an ecosystem is a new adapter, never an engine edit.** A markdown
+glossary in a fenced ```yaml term-map block is four lines:
 
 ```python
 from pathlib import Path
@@ -151,12 +165,14 @@ class MyMethodSource(FencedTermMapSource):
     name = "my-method"
     rel_paths = (Path("my-method") / "glossary.md",)
 
-register_source(MyMethodSource())          # register_source(..., first=True) to win precedence
+register_source(MyMethodSource())      # register_source(..., first=True) to win precedence
 ```
 
-A different artifact shape subclasses `SpecSource` and implements `detect(root)`
-and `read_terms(root)` — see the tests for a worked example. Adapters for other
-methodologies are welcome; that is the intended way to grow support.
+A different shape subclasses `SpecSource` and implements `detect(root)`, plus
+`read_terms(root)` and/or `artifacts(root)` — see `spec_sources.py` and the
+tests for worked examples. Sources are merged; registration order breaks ties.
+Adapters for other methodologies are welcome; that is the intended way to grow
+support.
 
 ## Configuration
 

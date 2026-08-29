@@ -23,17 +23,34 @@ define the same term, the earlier-registered adapter wins.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 
+@dataclass(frozen=True)
+class Artifact:
+    """A governing document contributed by a methodology.
+
+    `governs` are repo-relative globs the artifact claims authority over. Most
+    ecosystems don't declare them, so it is usually derived from the file paths
+    the document mentions — which is why the drift check can work over foreign
+    artifacts at all.
+    """
+    path: Path
+    source: str
+    kind: str                      # glossary | decision | design | plan | spec
+    governs: tuple[str, ...] = ()
+
+
 class SpecSource:
-    """Base adapter. Subclass and implement `detect` (+ `read_terms` if the
-    artifact isn't a fenced yaml term-map)."""
+    """Base adapter. Subclass and implement `detect`; add `read_terms` and/or
+    `artifacts` depending on what the ecosystem contributes."""
 
     name: str = "unnamed"
+    artifact_kind: str = "spec"
 
     def detect(self, root: Path) -> list[Path]:
         """Artifact paths this source contributes under `root` (empty if absent)."""
@@ -42,6 +59,41 @@ class SpecSource:
     def read_terms(self, root: Path) -> list[dict[str, Any]]:
         """Term entries: {term, domain, definition, source}. Default: none."""
         return []
+
+    def artifacts(self, root: Path) -> list[Artifact]:
+        """Governing documents this source contributes, for drift/coverage.
+
+        Default: every detected file, governing the paths it mentions."""
+        return [
+            Artifact(path=p, source=self.name, kind=self.artifact_kind,
+                     governs=tuple(mentioned_paths(p)))
+            for p in self.detect(root)
+        ]
+
+
+# Looks like a source path: has a directory separator and a file extension.
+_PATH_MENTION = re.compile(r"[`\"'(\s]([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.[A-Za-z0-9]{1,6})")
+
+
+def mentioned_paths(path: Path, *, limit: int = 200) -> list[str]:
+    """Repo-relative-looking file paths referenced inside a document.
+
+    Ecosystems like ADRs or design docs don't declare `applies_to`; what they DO
+    is name the files they are about. Treating those mentions as the governed set
+    lets the drift check reason about foreign artifacts without inventing a
+    convention for them."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    seen: dict[str, None] = {}
+    for m in _PATH_MENTION.finditer(text):
+        candidate = m.group(1)
+        if not candidate.startswith(("http", "www.")):
+            seen.setdefault(candidate, None)
+        if len(seen) >= limit:
+            break
+    return list(seen)
 
 
 class FencedTermMapSource(SpecSource):
@@ -92,8 +144,75 @@ class DocsNativeSource(FencedTermMapSource):
     rel_paths = (Path("docs") / "_terms" / "term-map.md",)
 
 
+class GrillWithDocsSource(SpecSource):
+    """grill-with-docs — interviews a design and writes it down as it resolves.
+
+    Glossary lands in a root `CONTEXT.md` (or per-context `CONTEXT.md` files when
+    the repo carries a `CONTEXT-MAP.md`); decisions land in `docs/adr/`.
+    """
+    name = "grill-with-docs"
+    artifact_kind = "decision"
+
+    def detect(self, root: Path) -> list[Path]:
+        found = [p for p in (root / "CONTEXT.md", root / "CONTEXT-MAP.md") if p.exists()]
+        adr = root / "docs" / "adr"
+        if adr.is_dir():
+            found.extend(sorted(adr.glob("*.md")))
+        if (root / "CONTEXT-MAP.md").exists():          # per-context glossaries
+            found.extend(p for p in sorted(root.glob("*/CONTEXT.md")))
+        return found
+
+    def read_terms(self, root: Path) -> list[dict[str, Any]]:
+        """CONTEXT.md glossaries are prose, not a fenced block: read `**term** —
+        definition` / `- term: definition` lines."""
+        out: list[dict[str, Any]] = []
+        for p in self.detect(root):
+            if p.name != "CONTEXT.md":
+                continue
+            for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = re.match(r"\s*[-*]?\s*\*\*(.+?)\*\*\s*[—:-]\s*(.+)", line)
+                if m:
+                    out.append({"term": m.group(1).strip(), "domain": None,
+                                "definition": m.group(2).strip(), "source": self.name})
+        return out
+
+    def artifacts(self, root: Path) -> list[Artifact]:
+        return [
+            Artifact(path=p, source=self.name,
+                     kind="glossary" if p.name in ("CONTEXT.md", "CONTEXT-MAP.md") else "decision",
+                     governs=tuple(mentioned_paths(p)))
+            for p in self.detect(root)
+        ]
+
+
+class SuperpowersSource(SpecSource):
+    """superpowers — its brainstorming/planning workflows write designs and plans
+    into the consuming repo under `docs/superpowers/`."""
+    name = "superpowers"
+    artifact_kind = "design"
+
+    def detect(self, root: Path) -> list[Path]:
+        base = root / "docs" / "superpowers"
+        if not base.is_dir():
+            return []
+        return sorted(p for sub in ("specs", "plans") for p in (base / sub).glob("*.md"))
+
+    def artifacts(self, root: Path) -> list[Artifact]:
+        return [
+            Artifact(path=p, source=self.name,
+                     kind="plan" if p.parent.name == "plans" else "design",
+                     governs=tuple(mentioned_paths(p)))
+            for p in self.detect(root)
+        ]
+
+
 # Registration order IS precedence.
-_SOURCES: list[SpecSource] = [HaftSource(), DocsNativeSource()]
+_SOURCES: list[SpecSource] = [
+    HaftSource(),
+    DocsNativeSource(),
+    GrillWithDocsSource(),
+    SuperpowersSource(),
+]
 
 
 def register_source(source: SpecSource, *, first: bool = False) -> None:
@@ -127,3 +246,8 @@ def load_terms(root: Path) -> list[dict[str, Any]]:
 def artifact_paths(root: Path) -> list[Path]:
     """Every detected artifact path — used for reload/staleness signatures."""
     return [p for _name, p in detect_all(root)]
+
+
+def all_artifacts(root: Path) -> list[Artifact]:
+    """Governing artifacts from every registered source — what drift checks."""
+    return [a for src in _SOURCES for a in src.artifacts(root)]

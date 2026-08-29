@@ -20,6 +20,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import memo_bank as mb  # noqa: E402
 from project_config import load as load_project_config  # noqa: E402
+import spec_sources  # noqa: E402
 
 
 # The documentation/governance layers are not "governed code" — a corpus doc or
@@ -61,11 +62,64 @@ def _changed_since(root: Path, since: str) -> set[str]:
     return out
 
 
+def _artifact_date(root: Path, path: Path) -> str | None:
+    """When the artifact was last touched — its last commit date, or mtime.
+
+    Foreign ecosystems don't carry `last_reviewed`, so the artifact's own history
+    stands in for it. Author date (%as), not committer date: a rebase or amend
+    shouldn't read as "the document was reviewed today"."""
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = str(path)
+    r = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%as", "--", rel],
+                       capture_output=True, text=True)
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip()
+    try:
+        import datetime
+        return datetime.date.fromtimestamp(path.stat().st_mtime).isoformat()
+    except OSError:
+        return None
+
+
+def find_adapter_drift(root: Path, slice_name: str) -> list[DriftFinding]:
+    """Drift over artifacts contributed by spec-source adapters.
+
+    The corpus pass below needs frontmatter (`applies_to` + `last_reviewed`).
+    Methodologies like grill-with-docs ADRs or superpowers designs have neither,
+    so their adapter reports which files the document *mentions*, and the
+    document's own last-commit date stands in for the review date. That is what
+    makes drift checkable across any registered ecosystem."""
+    findings: list[DriftFinding] = []
+    cache: dict[str, set[str]] = {}
+    for art in spec_sources.all_artifacts(root):
+        if not art.governs:
+            continue
+        reviewed = _artifact_date(root, art.path)
+        if not reviewed:
+            continue
+        if reviewed not in cache:
+            cache[reviewed] = {f for f in _changed_since(root, reviewed)
+                               if not f.startswith(_META_PREFIXES)}
+        try:
+            self_rel = art.path.relative_to(root).as_posix()
+        except ValueError:
+            self_rel = art.path.name
+        changed = governed_changes(list(art.governs), cache[reviewed], self_rel)
+        if changed:
+            findings.append(DriftFinding(
+                doc_id=f"{art.source}:{art.path.name}", slice=slice_name,
+                last_reviewed=reviewed, changed=changed))
+    return findings
+
+
 def find_drift(fed) -> list[DriftFinding]:
     """For each hot doc carrying last_reviewed + applies_to, find governed files
     that changed since the review."""
     findings: list[DriftFinding] = []
     cache: dict[tuple[str, str], set[str]] = {}
+    seen_roots: set[Path] = set()
     for name, corpus in fed.slices.items():
         for d in corpus.by_id.values():
             if d.kind not in ("spec", "state") or not d.indexed or not d.applies_to:
@@ -85,6 +139,11 @@ def find_drift(fed) -> list[DriftFinding]:
             if changed:
                 findings.append(DriftFinding(doc_id=d.id, slice=name,
                                              last_reviewed=lr, changed=changed))
+        # artifacts from other methodologies present in this slice
+        root = next((c.corpus_root for c in corpus.by_id.values()), None) or Path(".")
+        if root not in seen_roots:
+            seen_roots.add(root)
+            findings.extend(find_adapter_drift(root, name))
     return sorted(findings, key=lambda f: (-len(f.changed), f.slice, f.doc_id))
 
 

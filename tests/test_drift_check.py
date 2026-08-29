@@ -93,3 +93,35 @@ def test_run_is_nonblocking(tmp_path):
         '{"island":"t","version":1,"slices":[{"name":"main","root":"."}]}')
     rc = dc.run(tmp_path / ".island-slices.json")
     assert rc == 0
+
+
+def test_drift_detected_over_a_foreign_ecosystem_artifact(tmp_path):
+    """The payoff of adapters: an ADR from another methodology has no
+    `applies_to`/`last_reviewed`, yet drift is still checkable — it governs the
+    files it mentions, and its own commit date stands in for the review date."""
+    import memo_bank as mb
+
+    root = tmp_path
+    _git(root, "init", "-q"); _git(root, "config", "user.email", "t@t"); _git(root, "config", "user.name", "t")
+    (root / ".island-slices.json").write_text(
+        '{"island":"t","version":1,"slices":[{"name":"main","root":"."}]}')
+    _spec(root, "unrelated", ["docs/**"], "2999-01-01")     # corpus doc that must NOT flag
+
+    # a grill-with-docs ADR that names the file it governs, committed in the past
+    adr = root / "docs" / "adr"; adr.mkdir(parents=True)
+    (adr / "0001-db.md").write_text("We chose postgres. Governs `src/db/pool.py`.\n")
+    (root / "src").mkdir()
+    (root / "src" / "pool.py").write_text("old\n")
+    _git(root, "add", "."); _git(root, "commit", "-q", "-m", "adr + code",
+         "--date", "2020-01-01T00:00:00")
+
+    # the governed file changes AFTER the ADR was last touched
+    (root / "src" / "db").mkdir(parents=True)
+    (root / "src" / "db" / "pool.py").write_text("new implementation\n")
+    _git(root, "add", "."); _git(root, "commit", "-q", "-m", "rewrite pool")
+
+    findings = dc.find_adapter_drift(root, "main")
+    ids = {f.doc_id for f in findings}
+    assert "grill-with-docs:0001-db.md" in ids, findings
+    flagged = next(f for f in findings if f.doc_id == "grill-with-docs:0001-db.md")
+    assert "src/db/pool.py" in flagged.changed

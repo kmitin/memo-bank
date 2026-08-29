@@ -32,7 +32,8 @@ def _restore_registry():
 
 
 def test_builtin_adapters_are_registered_in_precedence_order():
-    assert [s.name for s in ss.sources()] == ["haft", "docs-native"]
+    assert [s.name for s in ss.sources()] == [
+        "haft", "docs-native", "grill-with-docs", "superpowers"]
 
 
 def test_haft_adapter_detects_and_reads(tmp_path):
@@ -113,3 +114,66 @@ def test_custom_parsing_adapter_can_bypass_the_fenced_format(tmp_path):
 def test_malformed_glossary_does_not_break_serving(tmp_path):
     _write(tmp_path, "docs/_terms/term-map.md", "```yaml term-map\n: : bad yaml :\n```\n")
     assert ss.load_terms(tmp_path) == []            # degrades, never raises
+
+
+# ---------------------------------------------------------------------------
+# Artifacts: adapters declare WHERE a methodology keeps governing documents,
+# which is what lets the drift check reason about foreign ecosystems.
+# ---------------------------------------------------------------------------
+
+def test_mentioned_paths_extracts_referenced_source_files(tmp_path):
+    doc = tmp_path / "adr.md"
+    doc.write_text(
+        "We changed `src/services/api.ts` and src/db/pool.py.\n"
+        "See https://example.com/docs/thing.html for background.\n"
+        "Also tests/test_api.py.\n")
+    got = ss.mentioned_paths(doc)
+    assert "src/services/api.ts" in got
+    assert "src/db/pool.py" in got
+    assert "tests/test_api.py" in got
+    assert not any(g.startswith("http") for g in got)      # URLs are not paths
+
+
+def test_grill_with_docs_adapter_reads_context_and_adrs(tmp_path):
+    (tmp_path / "CONTEXT.md").write_text(
+        "# Context\n\n- **widget-token** — the opaque handle a widget presents.\n"
+        "- **grill** — the interview loop.\n")
+    adr = tmp_path / "docs" / "adr"
+    adr.mkdir(parents=True)
+    (adr / "0001-use-postgres.md").write_text("We use postgres. Touches `src/db/pool.py`.\n")
+
+    names = {n for n, _ in ss.detect_all(tmp_path)}
+    assert "grill-with-docs" in names
+
+    terms = {t["term"]: t for t in ss.load_terms(tmp_path)}
+    assert "widget-token" in terms and terms["widget-token"]["source"] == "grill-with-docs"
+
+    arts = {a.path.name: a for a in ss.all_artifacts(tmp_path)}
+    assert arts["CONTEXT.md"].kind == "glossary"
+    assert arts["0001-use-postgres.md"].kind == "decision"
+    assert "src/db/pool.py" in arts["0001-use-postgres.md"].governs
+
+
+def test_superpowers_adapter_picks_up_designs_and_plans(tmp_path):
+    base = tmp_path / "docs" / "superpowers"
+    (base / "specs").mkdir(parents=True)
+    (base / "plans").mkdir(parents=True)
+    (base / "specs" / "2026-06-17-thing-design.md").write_text("Design. Governs `src/thing.py`.\n")
+    (base / "plans" / "2026-06-18-thing.md").write_text("Plan for src/thing.py\n")
+
+    arts = {a.path.name: a for a in ss.all_artifacts(tmp_path)}
+    assert arts["2026-06-17-thing-design.md"].kind == "design"
+    assert arts["2026-06-18-thing.md"].kind == "plan"
+    assert all(a.source == "superpowers" for a in arts.values())
+    assert "src/thing.py" in arts["2026-06-17-thing-design.md"].governs
+
+
+def test_artifacts_are_collected_across_every_source(tmp_path):
+    _write(tmp_path, ".haft/specs/term-map.md")
+    (tmp_path / "CONTEXT.md").write_text("- **a** — b\n")
+    sources = {a.source for a in ss.all_artifacts(tmp_path)}
+    assert sources == {"haft", "grill-with-docs"}
+
+
+def test_absent_ecosystems_contribute_nothing(tmp_path):
+    assert ss.all_artifacts(tmp_path) == []
