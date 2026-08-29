@@ -31,6 +31,8 @@ from typing import Any
 
 import frontmatter
 import yaml
+
+import spec_sources
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
@@ -110,60 +112,21 @@ def corpus_signature(root: Path) -> str:
                 continue
             parts.append(f"{p}:{p.stat().st_mtime_ns}")
     extras = [root / "docs" / "index.json"]
-    tm = _term_map_path(root)          # either supported location; reload tracks both
-    if tm is not None:
-        extras.append(tm)
+    extras.extend(spec_sources.artifact_paths(root))   # every detected source
     for extra in extras:
         if extra.exists():
             parts.append(f"{extra}:{extra.stat().st_mtime_ns}")
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
-# Term-map sources, in precedence order. `.haft/` is supported for projects that
-# use haft (that was the original, coupled binding); `docs/_terms/` is the
-# docs-native location so the engine carries NO dependency on a separate tool —
-# an adopter without haft still gets resolve_term. Underscore-prefixed, so the
-# corpus loader skips it as a document.
-_TERM_MAP_CANDIDATES = (
-    Path(".haft") / "specs" / "term-map.md",
-    Path("docs") / "_terms" / "term-map.md",
-)
-
-
-def _term_map_path(root: Path) -> Path | None:
-    """First existing term-map source under `root`, or None."""
-    for rel in _TERM_MAP_CANDIDATES:
-        p = root / rel
-        if p.exists():
-            return p
-    return None
-
-
 def _load_terms(root: Path) -> list[dict[str, Any]]:
-    """Parse term-map entries from the project's term map (a fenced
-    ```yaml term-map block with an `entries:` list).
+    """Terms for `root`, merged across every registered spec-source adapter.
 
-    Terms are bounded-context vocabulary, distinct from free `tags`. The source
-    is resolved from `_TERM_MAP_CANDIDATES` so the engine works with or without
-    haft; with no source, resolve_term simply reports `absent`."""
-    tm = _term_map_path(root)
-    if tm is None:
-        return []
-    text = tm.read_text(encoding="utf-8", errors="replace")
-    m = re.search(r"```yaml term-map\n(.*?)```", text, re.DOTALL)
-    if not m:
-        return []
-    try:
-        data = yaml.safe_load(m.group(1)) or {}
-    except Exception:  # noqa: BLE001
-        return []
-    out: list[dict[str, Any]] = []
-    for e in data.get("entries", []) or []:
-        if isinstance(e, dict) and e.get("term"):
-            out.append({"term": str(e["term"]),
-                        "domain": e.get("domain"),
-                        "definition": (e.get("definition") or "").strip()})
-    return out
+    Which ecosystems are understood is NOT decided here — see spec_sources.py.
+    A project keeping its vocabulary in haft, in the docs-native location, or in
+    any other methodology is a matter of which adapters are registered, so
+    supporting a new one never touches the engine."""
+    return spec_sources.load_terms(root)
 
 
 def _coerce_str_list(v: Any) -> list[str]:

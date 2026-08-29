@@ -126,9 +126,37 @@ embeddings, no vendor lock) — so expand a topic query with domain synonyms
 before searching; `docs.search_live`'s own description says so, and it roughly
 10×'d top-hit scores in practice.
 
-`docs.resolve_term` reads a term map from `.haft/specs/term-map.md` or the
-docs-native `docs/_terms/term-map.md`; with neither it reports `absent` rather
-than failing. There is no dependency on any other tool.
+`docs.resolve_term` reads project vocabulary through **spec-source adapters**
+(below); with no source present it reports `absent` rather than failing. The
+engine depends on no other tool.
+
+## Spec-source adapters
+
+Most projects already keep their vocabulary and governing artifacts in whatever
+methodology they use. The engine does not hardcode a list of known locations —
+each ecosystem is an **adapter** in `spec_sources.py` that detects its own
+artifacts under a project root and parses them into a neutral shape.
+
+Built in: `haft` (`.haft/specs/term-map.md`) and `docs-native`
+(`docs/_terms/term-map.md`). Sources are merged; registration order is precedence.
+
+**Adding an ecosystem is a new adapter, never an engine edit.** If it keeps a
+markdown glossary in a fenced ```yaml term-map block, that is four lines:
+
+```python
+from pathlib import Path
+from spec_sources import FencedTermMapSource, register_source
+
+class MyMethodSource(FencedTermMapSource):
+    name = "my-method"
+    rel_paths = (Path("my-method") / "glossary.md",)
+
+register_source(MyMethodSource())          # register_source(..., first=True) to win precedence
+```
+
+A different artifact shape subclasses `SpecSource` and implements `detect(root)`
+and `read_terms(root)` — see the tests for a worked example. Adapters for other
+methodologies are welcome; that is the intended way to grow support.
 
 ## Configuration
 
