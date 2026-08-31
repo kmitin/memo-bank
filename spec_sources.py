@@ -75,22 +75,33 @@ class SpecSource:
 _PATH_MENTION = re.compile(r"[`\"'(\s]([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.[A-Za-z0-9]{1,6})")
 
 
+# A document is scanned for path mentions, so it is untrusted input: cap how much
+# of it we read. Anything larger is a generated or binary file, not a spec.
+_MAX_SCAN_BYTES = 1_000_000
+
+
 def mentioned_paths(path: Path, *, limit: int = 200) -> list[str]:
     """Repo-relative-looking file paths referenced inside a document.
 
     Ecosystems like ADRs or design docs don't declare `applies_to`; what they DO
     is name the files they are about. Treating those mentions as the governed set
     lets the drift check reason about foreign artifacts without inventing a
-    convention for them."""
+    convention for them.
+
+    Only repo-relative paths are returned: a mention that escapes the project
+    (`../`) or is absolute governs nothing here, so it is dropped rather than
+    carried into glob matching."""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read(_MAX_SCAN_BYTES)
     except OSError:
         return []
     seen: dict[str, None] = {}
     for m in _PATH_MENTION.finditer(text):
         candidate = m.group(1)
-        if not candidate.startswith(("http", "www.")):
-            seen.setdefault(candidate, None)
+        if candidate.startswith(("http", "www.", "/")) or ".." in Path(candidate).parts:
+            continue
+        seen.setdefault(candidate, None)
         if len(seen) >= limit:
             break
     return list(seen)

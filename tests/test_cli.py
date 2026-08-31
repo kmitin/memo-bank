@@ -46,3 +46,14 @@ def test_dispatch_forwards_argv_to_the_subcommand(monkeypatch):
     assert cli.main(["drift", "--registry", "x.json"]) == 0
     assert seen["argv"][1:] == ["--registry", "x.json"]
     assert "drift" in seen["argv"][0]
+
+
+def test_missing_registry_reports_clearly_instead_of_a_traceback(capsys, monkeypatch, tmp_path):
+    """Run outside a memo-bank project, a command should explain itself."""
+    monkeypatch.chdir(tmp_path)
+    rc = cli.main(["drift"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert ".island-slices.json" in err
+    assert "memobank init" in err          # tells the user how to get one
+    assert "Traceback" not in err

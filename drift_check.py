@@ -139,11 +139,15 @@ def find_drift(fed) -> list[DriftFinding]:
             if changed:
                 findings.append(DriftFinding(doc_id=d.id, slice=name,
                                              last_reviewed=lr, changed=changed))
-        # artifacts from other methodologies present in this slice
-        root = next((c.corpus_root for c in corpus.by_id.values()), None) or Path(".")
-        if root not in seen_roots:
-            seen_roots.add(root)
-            findings.extend(find_adapter_drift(root, name))
+    # Artifacts from other methodologies, per slice. Roots come from the registry,
+    # not from a loaded doc: a slice with an empty corpus still has adapters worth
+    # checking, and deriving the root from "some doc" would silently fall back to
+    # the process's cwd.
+    for ref in getattr(fed, "refs", []):
+        if ref.root in seen_roots:
+            continue
+        seen_roots.add(ref.root)
+        findings.extend(find_adapter_drift(ref.root, ref.name))
     return sorted(findings, key=lambda f: (-len(f.changed), f.slice, f.doc_id))
 
 

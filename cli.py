@@ -53,7 +53,19 @@ def main(argv: list[str] | None = None) -> int:
     mod = importlib.import_module(module_name)
     # Hand the subcommand its own argv so its argparse usage line reads correctly.
     sys.argv = [f"memobank {sub}", *rest]
-    return mod.main()
+    try:
+        return mod.main()
+    except FileNotFoundError as exc:
+        # Overwhelmingly this is "run outside a memo-bank project". A traceback
+        # teaches nothing; say what is missing and how to get it.
+        missing = getattr(exc, "filename", None) or exc
+        print(f"memobank {sub}: cannot find {missing}", file=sys.stderr)
+        print("  This command needs a project registry. Run it from a memo-bank "
+              "project, pass --registry/--federation, or create one with:",
+              file=sys.stderr)
+        print("    memobank init --target . --island <name> --slice umbrella=.",
+              file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

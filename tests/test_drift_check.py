@@ -125,3 +125,25 @@ def test_drift_detected_over_a_foreign_ecosystem_artifact(tmp_path):
     assert "grill-with-docs:0001-db.md" in ids, findings
     flagged = next(f for f in findings if f.doc_id == "grill-with-docs:0001-db.md")
     assert "src/db/pool.py" in flagged.changed
+
+
+def test_adapter_drift_runs_for_a_slice_with_an_empty_corpus(tmp_path):
+    """A slice with no docs still has adapters worth checking — and the root must
+    come from the registry, never from a loaded doc (which would fall back to cwd)."""
+    import memo_bank as mb
+
+    root = tmp_path
+    _git(root, "init", "-q"); _git(root, "config", "user.email", "t@t"); _git(root, "config", "user.name", "t")
+    (root / ".island-slices.json").write_text(
+        '{"island":"t","version":1,"slices":[{"name":"main","root":"."}]}')
+    adr = root / "docs" / "adr"; adr.mkdir(parents=True)
+    (adr / "0001.md").write_text("Governs `src/thing.py`.\n")
+    (root / "src").mkdir(); (root / "src" / "thing.py").write_text("v1\n")
+    _git(root, "add", "."); _git(root, "commit", "-q", "-m", "init", "--date", "2020-01-01T00:00:00")
+    (root / "src" / "thing.py").write_text("v2\n")
+    _git(root, "add", "."); _git(root, "commit", "-q", "-m", "change")
+
+    fed = mb.load_federation(mb.parse_registry(root / ".island-slices.json"))
+    assert fed.slices["main"].by_id == {}                 # genuinely empty corpus
+    ids = {f.doc_id for f in dc.find_drift(fed)}
+    assert "grill-with-docs:0001.md" in ids, ids

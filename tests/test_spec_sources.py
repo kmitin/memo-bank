@@ -177,3 +177,17 @@ def test_artifacts_are_collected_across_every_source(tmp_path):
 
 def test_absent_ecosystems_contribute_nothing(tmp_path):
     assert ss.all_artifacts(tmp_path) == []
+
+
+def test_mentioned_paths_drops_escaping_and_absolute_paths(tmp_path):
+    """A document is untrusted input: mentions that leave the project govern
+    nothing here and must not reach glob matching."""
+    doc = tmp_path / "adr.md"
+    doc.write_text("See `../../../etc/passwd`, `/etc/hosts`, `../other/secret.py`, `src/ok.py`\n")
+    assert ss.mentioned_paths(doc) == ["src/ok.py"]
+
+
+def test_mentioned_paths_bounds_how_much_it_reads(tmp_path):
+    doc = tmp_path / "huge.md"
+    doc.write_text("x/y.py\n" * 400_000)          # ~2.8 MB
+    assert ss.mentioned_paths(doc) == ["x/y.py"]  # completes, deduped, no blowup
