@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="assets/cloud-brain-banner.svg" width="100%"
+       alt="A cloud-shaped character in round spectacles holds a magnifying glass over a fan of document cards; one card is highlighted in amber — the one spec that governs the file you are about to edit.">
+</p>
+
 # memo-bank
 
 **Your specs are contracts. This makes an agent read them before it edits your code — and tells you when they rot.**
