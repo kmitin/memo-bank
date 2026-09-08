@@ -10,8 +10,10 @@
 memo-bank is a read-only [MCP](https://modelcontextprotocol.io) server over a
 git-native markdown corpus, plus two maintenance loops that keep that corpus
 honest. Point it at a repo and an agent can answer *"what rules govern this
-file?"* in about two reads, instead of re-deriving the answer from forty files
-every time.
+file?"* in about two reads, at a predictable cost.
+
+It is **not** a token-savings tool. We A/B'd that claim and it did not hold — see
+[Measured: what it does and doesn't buy](#measured-what-it-does-and-doesnt-buy).
 
 MIT licensed · Python ≥3.11 · three dependencies (`mcp`, `python-frontmatter`, `PyYAML`).
 
@@ -128,8 +130,9 @@ refactors.
 They form an **incremental-load ladder**: pointers → one section → one doc →
 ranked search → a budget-bounded bundle. Retrieval is lexical (bag-of-words, no
 embeddings, no vendor lock) — so expand a topic query with domain synonyms
-before searching; `docs.search_live`'s own description says so, and it roughly
-10×'d top-hit scores in practice.
+before searching; `docs.search_live`'s own description says so. Expansion raises the
+top hit's *relevance score* markedly (3.0 -> 32.0 on one measured query); that is a
+ranking improvement, not a token saving.
 
 `docs.resolve_term` reads project vocabulary through **spec-source adapters**
 (below); with no source present it reports `absent` rather than failing. The
@@ -195,6 +198,36 @@ One file, `.island-slices.json`, is the whole adoption contract:
 
 Only `slices` is required; everything else defaults. The engine carries no
 project literals.
+
+## Measured: what it does and doesn't buy
+
+We ran a real A/B — 32 headless agent runs, retrieval vs. plain search over the same
+corpus, asking "what governs this file?" ([method and raw numbers](eval/context-cost-ab/)).
+
+**Correctness: 32/32 in both arms.** Search found the right spec too; retrieval did not
+make the answer more reachable.
+
+**Tokens: no measurable saving.** +3.5% raw, +6.3% cache-weighted, sd 14.4pp across
+tasks — inside the noise. Retrieval was cheaper on 4 of 8 tasks.
+
+**What did hold — predictability:**
+
+| | tokens sd | turns range |
+|---|---|---|
+| retrieval | 46,832 | 7–12 |
+| search | 123,300 | **3–18** |
+
+Search is a lottery; retrieval is consistent. Predictable context cost, not lower.
+
+**Why:** ~92% of a run is per-turn context reload, and cached reads cost ~0.1×. That
+makes "just put the whole corpus in the cached prefix" a strong alternative — it wins
+below roughly **20–23k corpus tokens**. The corpus we measured was 20,364, i.e. exactly
+at the crossover.
+
+**So:** if your corpus is small, skip retrieval and put your specs in the system prompt.
+memo-bank earns its keep when the corpus outgrows what you want resident in context —
+and for the maintenance loops, which have nothing to do with retrieval. That larger-corpus
+case is a prediction we have not yet tested.
 
 ## Status
 
