@@ -7,3 +7,4 @@ coverage-backlog.json
 eval/results/
 eval/sandbox/
 .DS_Store
+.env
