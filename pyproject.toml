@@ -1,6 +1,6 @@
 [project]
 name = "memo-bank"
-version = "0.3.0"
+version = "0.4.0"
 description = "Read-only MCP server + maintenance loops over a git-native docs corpus: resolve the spec governing a file in ~2 reads, and keep the corpus honest (missing-spec coverage loop, stale-spec drift check)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,6 +28,7 @@ build-backend = "setuptools.build_meta"
 # `python drift_check.py`) while making everything importable once installed.
 py-modules = [
     "memo_bank",
+    "rerank",
     "cli",
     "doc_validator",
     "project_config",

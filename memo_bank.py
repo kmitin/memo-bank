@@ -13,6 +13,9 @@ Corpus loading prefers a validator-generated docs/index.json and falls back to
 a filesystem walk + frontmatter parse. The federation reloads a slice when its
 content changes (mtime-based), so edits are picked up without a restart.
 
+Optional `--rerank jev` re-ranks docs.search_live semantically via TypeSafe's
+API (see rerank.py); without it the server makes no network calls.
+
 Deliberately out of scope: writes of any kind, and cross-corpus `related:`
 resolution (each corpus validates independently).
 """
@@ -485,18 +488,15 @@ def tool_get_section(corpus: Corpus, id: str, section: str) -> dict[str, Any]:
     }
 
 
-def _search(corpus: Corpus, query: str, *, archive_only: bool,
-            subproject: str | None = None, kind: str | None = None,
-            feature: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-    """Shared lexical search. Returns ranked POINTERS (summaries + score +
-    snippet) — never full bodies, so search itself stays incremental."""
+def _scored_docs(corpus: Corpus, query: str, *, archive_only: bool,
+                 subproject: str | None = None, kind: str | None = None
+                 ) -> list[tuple[float, CorpusDoc, str, str]]:
+    """(lexical score, doc, body, snippet) for every doc in scope, zero scores
+    included. The one scoring loop behind plain and re-ranked search."""
     qterms = set(_tokenize(query))
-    scored: list[tuple[float, dict[str, Any]]] = []
+    rows: list[tuple[float, CorpusDoc, str, str]] = []
     for d in corpus.docs():
-        is_archive = d.kind == DOC_KIND_ARCHIVE
-        if archive_only and not is_archive:
-            continue
-        if not archive_only and is_archive:
+        if (d.kind == DOC_KIND_ARCHIVE) != archive_only:
             continue
         if subproject is not None and d.subproject != subproject:
             continue
@@ -504,11 +504,28 @@ def _search(corpus: Corpus, query: str, *, archive_only: bool,
             continue
         body = _load_body(d) or ""
         score, snippet = _lexical_score(qterms, d, body)
-        if score <= 0:
-            continue
-        scored.append((score, {**d.to_summary(), "score": score, "snippet": snippet}))
-    scored.sort(key=lambda t: (-t[0], t[1]["subproject"], t[1]["id"]))
-    return [s for _, s in scored[:limit]]
+        rows.append((score, d, body, snippet))
+    return rows
+
+
+def _rank_key(row: tuple[float, CorpusDoc, str, str]) -> tuple:
+    return (-row[0], row[1].subproject, row[1].id)
+
+
+def _hit(row: tuple[float, CorpusDoc, str, str]) -> dict[str, Any]:
+    score, d, _body, snippet = row
+    return {**d.to_summary(), "score": score, "snippet": snippet}
+
+
+def _search(corpus: Corpus, query: str, *, archive_only: bool,
+            subproject: str | None = None, kind: str | None = None,
+            feature: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+    """Shared lexical search. Returns ranked POINTERS (summaries + score +
+    snippet) — never full bodies, so search itself stays incremental."""
+    rows = [r for r in _scored_docs(corpus, query, archive_only=archive_only,
+                                    subproject=subproject, kind=kind) if r[0] > 0]
+    rows.sort(key=_rank_key)
+    return [_hit(r) for r in rows[:limit]]
 
 
 def tool_search_live(corpus: Corpus, query: str, subproject: str | None = None,
@@ -834,6 +851,32 @@ def fed_search_live(fed: Federation, query: str, subproject: str | None = None,
     return _envelope(fed, hits)
 
 
+def search_live_reranked(ctx: "Corpus | Federation", reranker: Any, query: str,
+                         subproject: str | None = None, kind: str | None = None
+                         ) -> dict[str, Any]:
+    """docs.search_live with semantic re-ranking (`memobank serve --rerank`).
+
+    The lexical top `reranker.shortlist` docs are re-sorted by relevance. When
+    fewer docs match lexically, the shortlist is padded with the rest of the hot
+    corpus, so a doc that shares no words with the query can still win — that is
+    the vocabulary-mismatch case re-ranking exists for. If re-ranking fails, the
+    plain lexical results come back, with `rerank.status: failed`."""
+    import rerank  # local: the offline server never loads the network module
+    corpora = list(ctx.slices.values()) if isinstance(ctx, Federation) else [ctx]
+    rows = [r for c in corpora
+            for r in _scored_docs(c, query, archive_only=False,
+                                  subproject=subproject, kind=kind)]
+    rows.sort(key=_rank_key)
+    candidates = [(_hit(r), rerank.doc_card(r[1].title, r[1].tags, r[2]))
+                  for r in rows[:reranker.shortlist]]
+    hits, meta = reranker.rerank(query, candidates)
+    if meta["status"] != "ok":  # lexical fallback: drop the zero-score padding
+        hits = [h for h in hits if h["score"] > 0]
+    if isinstance(ctx, Federation):
+        return {**_envelope(ctx, hits), "rerank": meta}
+    return {"results": hits, "rerank": meta}
+
+
 def fed_search_archive(fed: Federation, query: str, feature: str | None = None,
                        subproject: str | None = None) -> dict[str, Any]:
     """Federated docs.search_archive — cold search merged across slices."""
@@ -1045,6 +1088,30 @@ TOOLS: list[Tool] = [
     ),
 ]
 
+RERANKED_SEARCH_DESCRIPTION = (
+    "Content search over the HOT corpus (specs + state); archive excluded by "
+    "construction. Returns ranked pointers (summary + score + snippet), not "
+    "bodies. RANKING IS SEMANTIC: candidates are re-ranked by a relevance model, "
+    "so ask in plain language — no synonym expansion needed. Each hit carries "
+    "`relevance` (0-1). `rerank.governing_doc_found: false` means NO hot doc "
+    "covers the topic: treat it as undocumented, not unconstrained, and do not "
+    "adopt a low-relevance hit as the governing spec. If `rerank.status` is "
+    "`failed` (governing_doc_found is then null), results are plain lexical: "
+    "expand the query with domain synonyms and retry.")
+
+
+def with_reranked_search(tools: list[Tool], dispatch: dict, reranker: Any
+                         ) -> tuple[list[Tool], dict]:
+    """The tool surface and dispatch for `serve --rerank`: docs.search_live is
+    re-ranked and its description tells the agent how to read the result."""
+    tools = [Tool(name=t.name, description=RERANKED_SEARCH_DESCRIPTION,
+                  inputSchema=t.inputSchema) if t.name == "docs.search_live" else t
+             for t in tools]
+    dispatch = {**dispatch, "docs.search_live":
+                lambda ctx, args: search_live_reranked(ctx, reranker, **args)}
+    return tools, dispatch
+
+
 TOOL_DISPATCH = {
     "docs.list": lambda corpus, args: tool_list(corpus, **args),
     "docs.get": lambda corpus, args: tool_get(corpus, **args),
@@ -1061,7 +1128,8 @@ TOOL_DISPATCH = {
 # MCP wiring
 # ---------------------------------------------------------------------------
 
-def build_server(ctx: Any, dispatch: dict | None = None) -> Server:
+def build_server(ctx: Any, dispatch: dict | None = None,
+                 tools: list[Tool] | None = None) -> Server:
     """Build the MCP server over `ctx` (a Corpus for slice mode, a Federation
     for federation mode), routing implemented tools through `dispatch`.
 
@@ -1070,11 +1138,13 @@ def build_server(ctx: Any, dispatch: dict | None = None) -> Server:
     """
     if dispatch is None:
         dispatch = TOOL_DISPATCH
+    if tools is None:
+        tools = TOOLS
     server = Server("memo-bank")
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
-        return TOOLS
+        return tools
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextContent]:
@@ -1137,6 +1207,18 @@ def main() -> int:
     parser.add_argument(
         "--list-tools", action="store_true",
         help="Print the registered tool surface and exit (smoke test).")
+    parser.add_argument(
+        "--rerank", choices=["off", "jev"], default="off",
+        help="Semantic re-ranking for docs.search_live. 'jev' sends each search "
+             "query and the shortlisted hot docs' text to TypeSafe's API "
+             "(needs TYPESAFE_API_KEY). Default: off — nothing leaves the machine.")
+    parser.add_argument("--rerank-shortlist", type=int, default=20, metavar="N",
+                        help="Docs re-ranked per search, one API call each (default 20).")
+    parser.add_argument("--rerank-threshold", type=float, default=0.5, metavar="P",
+                        help="Top relevance below P reports governing_doc_found: "
+                             "false (default 0.5).")
+    parser.add_argument("--rerank-model", default="jev-latest",
+                        help="TypeSafe model id (default jev-latest).")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -1149,17 +1231,35 @@ def main() -> int:
         LOG.error("pass either --federation OR --corpus, not both")
         return 2
 
+    reranker = None
+    if args.rerank == "jev":
+        import rerank
+        try:
+            reranker = rerank.from_env(shortlist=args.rerank_shortlist,
+                                       threshold=args.rerank_threshold,
+                                       model=args.rerank_model)
+        except (rerank.RerankError, ValueError) as exc:
+            LOG.error("%s", exc)
+            return 2
+        LOG.warning("rerank=jev: search queries and shortlisted hot-doc text "
+                    "(title, tags, first %d chars) are sent to %s",
+                    rerank.BODY_CHARS, rerank.ENDPOINT)
+
+    def surface(dispatch: dict) -> tuple[list[Tool], dict]:
+        return with_reranked_search(TOOLS, dispatch, reranker) if reranker else (TOOLS, dispatch)
+
     if args.federation:
         registry = parse_registry(args.federation)
         fed = load_federation(registry)
         LOG.info("memo-bank federation ready: %d slices ok, %d unreachable",
                  len(fed.slices), len(fed.unreachable))
+        tools, dispatch = surface(FED_DISPATCH)
         if args.list_tools:
-            for t in TOOLS:
-                marker = "" if t.name in FED_DISPATCH else " [STUB]"
+            for t in tools:
+                marker = "" if t.name in dispatch else " [STUB]"
                 print(f"{t.name}{marker}")
             return 0
-        asyncio.run(_run_stdio(fed, FED_DISPATCH))
+        asyncio.run(_run_stdio(fed, dispatch, tools))
         return 0
 
     if not args.corpus:
@@ -1171,18 +1271,19 @@ def main() -> int:
     LOG.info("memo-bank slice ready: %d docs across %d corpora",
              len(corpus.by_id), len(corpus.corpora))
 
+    tools, dispatch = surface(TOOL_DISPATCH)
     if args.list_tools:
-        for t in TOOLS:
-            stub_marker = " [STUB]" if t.name not in TOOL_DISPATCH else ""
+        for t in tools:
+            stub_marker = " [STUB]" if t.name not in dispatch else ""
             print(f"{t.name}{stub_marker}")
         return 0
 
-    asyncio.run(_run_stdio(corpus, TOOL_DISPATCH))
+    asyncio.run(_run_stdio(corpus, dispatch, tools))
     return 0
 
 
-async def _run_stdio(ctx: Any, dispatch: dict) -> None:
-    server = build_server(ctx, dispatch)
+async def _run_stdio(ctx: Any, dispatch: dict, tools: list[Tool] | None = None) -> None:
+    server = build_server(ctx, dispatch, tools)
     async with stdio_server() as (read, write):
         await server.run(read, write, server.create_initialization_options())
 

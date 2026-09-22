@@ -55,6 +55,15 @@ must contain the corpus's actual words.
 2. `docs_search_live(<expanded query>)` → ranked pointers; then `docs_get` the top hits.
 3. Unsure of the vocabulary? `docs_list` first and reuse its tags.
 
+**If the response has a `rerank` block**, the server runs semantic re-ranking
+(`serve --rerank jev`): plain-language queries work without expansion, and hits
+carry `relevance` (0–1). Read `rerank.governing_doc_found`:
+- `true` → the top hit is the doc to read.
+- `false` → **no hot doc covers this topic**. Report it as undocumented; don't
+  adopt a low-relevance hit as the governing spec.
+- `null` with `status: failed` → re-ranking was unavailable and the results are
+  lexical, so fall back to steps 1–3.
+
 ### Need a bounded bundle → `docs_compose_context`
 `docs_compose_context(question=… | path=… | tags=[…], budget_tokens=N)` assembles a
 budget-bounded set of sections. Use it when one doc isn't enough but the whole

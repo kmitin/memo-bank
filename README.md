@@ -182,6 +182,44 @@ tests for worked examples. Sources are merged; registration order breaks ties.
 Adapters for other methodologies are welcome; that is the intended way to grow
 support.
 
+## Optional: semantic re-ranking
+
+Lexical search misses when the question's words differ from the doc's, and it
+always returns *some* top hit. `--rerank jev` fixes both, at the cost of a network
+call to [TypeSafe](https://docs.typesafe.ai)'s Jev model:
+
+```bash
+export TYPESAFE_API_KEY=...          # from your environment or secret store
+memobank serve --federation .island-slices.json --rerank jev
+```
+
+`docs.search_live` then re-sorts the lexical top 20 by relevance (on a smaller
+corpus the shortlist is padded with the remaining docs, so a doc sharing no words
+with the query can still win). Each hit gains a `relevance` score from 0 to 1,
+and the response gains a verdict:
+
+```
+docs.search_live("how is dark mode implemented")
+  → rerank: {status: ok, top_relevance: 0.02, governing_doc_found: false}
+```
+
+`governing_doc_found: false` means no hot doc covers the topic: the agent should
+treat it as undocumented, not unconstrained. The tool description tells it so.
+
+On a real 16-doc project corpus ([eval](eval/jev-ab/)), re-ranking lifted hard-query
+top-1 accuracy from 0.20 to 0.80 on a gold set labelled before the experiment.
+Its "no governing doc" verdict made no false calls in 40 queries. A search takes
+about 0.8 s and roughly $0.0008.
+
+**What leaves the machine:** the search query, plus the title, tags and first
+4,000 characters of each shortlisted **hot** doc, sent to `api.typesafe.ai`.
+Archive entries are never sent. The mode is off by default, and without the flag
+nothing is sent anywhere. **Failure is safe:** if the API errors, times out or
+the key is wrong, search returns the plain lexical results with
+`rerank.status: failed` and the reason. Flags: `--rerank-shortlist N`
+(calls per search), `--rerank-threshold P` (the verdict's cut-off, default 0.5),
+`--rerank-model`.
+
 ## Configuration
 
 One file, `.island-slices.json`, is the whole adoption contract:
@@ -228,6 +266,11 @@ at the crossover.
 memo-bank earns its keep when the corpus outgrows what you want resident in context —
 and for the maintenance loops, which have nothing to do with retrieval. That larger-corpus
 case is a prediction we have not yet tested.
+
+**Retrieval quality: semantic re-ranking helps.** A separate A/B
+([eval/jev-ab](eval/jev-ab/)) found that opt-in `--rerank jev` beats lexical
+search and synonym expansion on vocabulary-mismatch queries, and reliably reports
+"no doc governs this". See [Optional: semantic re-ranking](#optional-semantic-re-ranking).
 
 ## Status
 
